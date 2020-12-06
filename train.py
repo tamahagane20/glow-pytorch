@@ -93,7 +93,7 @@ def calc_loss(log_p, logdet, image_size, n_bins):
     )
 
 
-def train(args, model, optimizer):
+def train(args, model, optimizer, num=0):
     dataset = iter(sample_data(args.path, args.batch, args.img_size))
     n_bins = 2.0 ** args.n_bits
 
@@ -103,23 +103,14 @@ def train(args, model, optimizer):
         z_new = torch.randn(args.n_sample, *z) * args.temp
         z_sample.append(z_new.to(device))
 
-    with tqdm(range(args.iter)) as pbar:
+    with tqdm(range(num, args.iter), initial=num, total=args.iter) as pbar:
         for i in pbar:
             image, _ = next(dataset)
             image = image.to(device)
 
-            image = image * 255
-
-            if args.n_bits < 8:
-                image = torch.floor(image / 2 ** (8 - args.n_bits))
-
-            image = image / n_bins - 0.5
-
             if i == 0:
                 with torch.no_grad():
-                    log_p, logdet, _ = model.module(
-                        image + torch.rand_like(image) / n_bins
-                    )
+                    log_p, logdet, _ = model.module(image + torch.rand_like(image) / n_bins)
 
                     continue
 
@@ -140,7 +131,7 @@ def train(args, model, optimizer):
                 f"Loss: {loss.item():.5f}; logP: {log_p.item():.5f}; logdet: {log_det.item():.5f}; lr: {warmup_lr:.7f}"
             )
 
-            if i % 100 == 0:
+            if i % 2000 == 0:
                 with torch.no_grad():
                     utils.save_image(
                         model_single.reverse(z_sample).cpu().data,
@@ -158,8 +149,32 @@ def train(args, model, optimizer):
                     optimizer.state_dict(), f"checkpoint/optim_{str(i + 1).zfill(6)}.pt"
                 )
 
+def load_checkpoint(model, optimizer):
+    """最後のチェックポイントを読み込ませる
+    """
+    import glob
+    import re
+    
+    #モデルファイルを検索
+    model_paths = glob.glob("checkpoint/model_*.pt")
+    
+    #なければ0を返す
+    if(len(model_paths) == 0):
+        return 0
+    
+    #最大の連番を抽出
+    model_path = model_paths[-1]
+    m = re.search(r'\d+', model_path)
+    num = m.group()
+    
+    optim_path = f'checkpoint/optim_{num}.pt'
+    
+    #データを読み込ませる
+    model.load_state_dict(torch.load(model_path))
+    optimizer.load_state_dict(torch.load(optim_path))
+    return int(num)  #読み込んだ連番を整数で返す
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     args = parser.parse_args()
     print(args)
 
@@ -172,4 +187,5 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
-    train(args, model, optimizer)
+    num = load_checkpoint(model, optimizer)
+    train(args, model, optimizer, num)
